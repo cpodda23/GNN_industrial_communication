@@ -1,0 +1,22 @@
+# ---- PyTorch (CPU version) ----
+torch>=2.0.0
+
+# ---- DGL (Graph Neural Network library) ----
+dgl==1.1.0
+
+# ---- Numerical and scientific computing ----
+numpy>=1.23
+scipy>=1.10
+
+# ---- Plotting / Visualization ----
+matplotlib>=3.6
+
+# ---- Machine learning utilities ----
+scikit-learn>=1.2
+
+# ---- General utilities ----
+tqdm>=4.65
+
+# ---- Optional but recommended ----
+pandas>=1.5
+
