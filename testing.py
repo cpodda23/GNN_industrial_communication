@@ -5,7 +5,7 @@ import numpy as np
 from nets import IndustrialMAC_HeteroGNN
 from training import IndustrialDataset
 from wirelessNetwork import build_hetero_graph
-from resource_grid import plot_node_time_scheduling, plot_ap_time_assignment, plot_ofdm_grid, plot_ofdm_time_frequency
+from resource_grid import plot_node_time_scheduling, plot_ap_time_assignment, plot_ofdm_grid, plot_ofdm_time_frequency_window, plot_all_doppler_windows
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
@@ -121,7 +121,9 @@ def test_model(
             #     plot_node_time_scheduling(pred_sched, pred_ap_onehot)
             #     plot_ap_time_assignment(pred_ap_onehot)
             #     plot_ofdm_grid(pred_ap_onehot)
-            plot_ofdm_time_frequency(pred_sched, pred_ap_onehot)
+            #plot_ofdm_time_frequency_window(pred_sched, pred_ap_onehot)
+            if i==0:
+                plot_all_doppler_windows(pred_sched, pred_ap_onehot, num_subcarriers=32, window_size=5)
 
     # Report finale
     print("\n==================== RISULTATI FINALI ====================")
