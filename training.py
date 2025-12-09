@@ -1,9 +1,6 @@
-# ===============================================================
-# training.py — Training per IndustrialMAC_HeteroGNN
-# ===============================================================
-
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import torch.optim as optim
 from torch.utils.data import DataLoader
 import os
@@ -15,6 +12,7 @@ from wirelessNetwork import build_hetero_graph
 # ===============================================================
 # Dataset Loader
 # ===============================================================
+
 class IndustrialDataset(torch.utils.data.Dataset):
     def __init__(self, data_dir="data"):
         self.files = sorted([f"{data_dir}/{f}" for f in os.listdir(data_dir) if f.endswith(".pt")])
@@ -28,19 +26,20 @@ class IndustrialDataset(torch.utils.data.Dataset):
         return {
             "device_pos": sample["nodes_pos"],       # [N_dev,2]
             "ap_pos": sample["ap_pos"],              # [N_ap,2]
-            "csi": sample["csi"],                    # [N_dev,N_ap,F,T]
+            "csi": sample["csi"],                    # [N_dev,N_ap,F,T,2]
             "schedule": sample["schedule"],          # [N_dev,T]
-            "ap_assign": sample["ap_assign"]         # [N_dev]
+            "ap_assign": sample["ap_assign"]         # [N_dev,T]
         }
 
 
 # ===============================================================
 # Training Loop
 # ===============================================================
+
 def train_model(
         data_dir="data",
         lr=1e-3,
-        epochs=20,
+        epochs=30,
         batch_size=1,
         device="cuda" if torch.cuda.is_available() else "cpu"):
 
@@ -48,41 +47,60 @@ def train_model(
     loader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
 
     model = IndustrialMAC_HeteroGNN().to(device)
-
-    # Loss functions
-    sched_loss_fn = nn.BCELoss()
-    ap_loss_fn = nn.CrossEntropyLoss()
-
     optimizer = optim.Adam(model.parameters(), lr=lr)
 
-    print(f"Training on {device}...")
+    print(f"Training on {device}...\n")
 
     for epoch in range(epochs):
         total_loss = 0.0
 
         for batch in loader:
 
+            # ------------------------------
             # Caricamento tensori
-            device_pos = batch["device_pos"].squeeze(0).to(device)   # [N_dev,2]
-            ap_pos = batch["ap_pos"].squeeze(0).to(device)           # [N_ap,2]
-            csi = batch["csi"].squeeze(0).to(device)                 # [N_dev,N_ap,F,T]
+            # ------------------------------
+            device_pos  = batch["device_pos"].squeeze(0).to(device)   # [N,2]
+            ap_pos      = batch["ap_pos"].squeeze(0).to(device)       # [A,2]
+            csi         = batch["csi"].squeeze(0).to(device)          # [N,A,F,T,2]
 
-            target_sched = batch["schedule"].squeeze(0).to(device)   # [N_dev,T]
-            target_ap = batch["ap_assign"].squeeze(0).to(device)     # [N_dev]
+            target_sched = batch["schedule"].squeeze(0).to(device)    # [N,T]
+            target_ap    = batch["ap_assign"].squeeze(0).to(device)   # [N,T]
 
-            # Costruzione grafo eterogeneo
-            g = build_hetero_graph(device_pos.cpu().numpy(), ap_pos.cpu().numpy())
+            # ------------------------------
+            # Costruzione grafo
+            # ------------------------------
+            g = build_hetero_graph(device_pos.cpu().numpy(),
+                                   ap_pos.cpu().numpy())
             g = g.to(device)
 
+            # ------------------------------
             # Forward
-            pred_sched, pred_ap = model(g, device_pos, ap_pos, csi)
+            # ------------------------------
+            pred_sched_hard, pred_ap_logits = model(g, device_pos, ap_pos, csi)
+            # pred_ap_logits : [N, T, A]  (logits differenziabili)
 
-            # Loss
-            loss_sched = sched_loss_fn(pred_sched, target_sched)
-            loss_ap = ap_loss_fn(pred_ap, target_ap)
-            loss = loss_sched + loss_ap
+            N, T, A = pred_ap_logits.shape
 
+            # ------------------------------
+            # PREPARAZIONE PER CROSS-ENTROPY
+            # ------------------------------
+            logits = pred_ap_logits.reshape(N*T, A)
+            targets = target_ap.reshape(N*T)
+
+            # Consideriamo solo slot realmente attivi
+            mask = target_sched.reshape(N*T) > 0.5
+
+            logits = logits[mask]        # [K, A]
+            targets = targets[mask]      # [K]
+
+            if logits.numel() == 0:
+                loss = torch.tensor(0.0, device=device)
+            else:
+                loss = F.cross_entropy(logits, targets.long())
+
+            # ------------------------------
             # Backprop
+            # ------------------------------
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
@@ -91,12 +109,15 @@ def train_model(
 
         print(f"[Epoch {epoch+1}/{epochs}] Loss = {total_loss:.4f}")
 
-        # Checkpoint
+        # ------------------------------
+        # Checkpoint ogni 5 epoch
+        # ------------------------------
         if (epoch+1) % 5 == 0:
-            torch.save(model.state_dict(), f"model_epoch_{epoch+1}.pth")
-            print(f"Salvato modello: model_epoch_{epoch+1}.pth")
+            path = f"model_epoch_{epoch+1}.pth"
+            torch.save(model.state_dict(), path)
+            print(f"Salvato modello: {path}")
 
-    print("Training completato.")
+    print("\nTraining completato.\n")
     return model
 
 

@@ -1,7 +1,3 @@
-# ===========================================================
-# nets.py — Heterogeneous GNN con device + AP
-# ===========================================================
-
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -134,47 +130,71 @@ class IndustrialMAC_HeteroGNN(nn.Module):
             nn.Linear(64, 64),
             nn.ReLU(),
             nn.Linear(64, time_slots),
-            nn.Sigmoid()
         )
 
         # AP selection head
         self.ap_head = nn.Sequential(
-            nn.Linear(64, 32),
-            nn.ReLU(),
-            nn.Linear(32, num_ap)
-        )
+        nn.Linear(64, 64),
+        nn.ReLU(),
+        nn.Linear(64, time_slots * num_ap)  # output flat, shape per nodo
+    )
+        self.time_slots = time_slots
+        self.num_ap = num_ap
+
 
     def forward(self, g, device_pos, ap_pos, csi):
-        """
-        g           : grafo eterogeneo DGL
-        device_pos  : [N_dev, 2]
-        ap_pos      : [N_ap, 2]
-        csi         : [N_dev, N_ap, F, T]
-        """
-
-        # Encode nodi device
+        # ==============================
+        # 1. ENCODING
+        # ==============================
         csi_embed = self.csi_encoder(csi)
         h_device = self.device_encoder(device_pos, csi_embed)
-
-        # Encode nodi AP
         h_ap = self.ap_encoder(ap_pos)
 
-        # Put in dict for HeteroGraphConv
-        h = {
-            'device': h_device,
-            'ap': h_ap
-        }
+        h = {"device": h_device, "ap": h_ap}
 
-        # Heterogeneous message passing
         h = self.conv1(g, h)
         h = {k: F.relu(v) for k, v in h.items()}
 
         h = self.conv2(g, h)
         h = {k: F.relu(v) for k, v in h.items()}
 
-        # Readout SOLO per i device
-        sched = self.sched_head(h['device'])
-        ap_logits = self.ap_head(h['device'])
-        ap_probs = F.softmax(ap_logits, dim=1)
+        # ==============================
+        # 2. LOGITS PER NODO/TIME/AP
+        # ==============================
+        ap_logits = self.ap_head(h["device"])  # [N, T*A]
+        ap_logits = ap_logits.view(-1, self.time_slots, self.num_ap)  # [N, T, A]
 
-        return sched, ap_probs
+        # ============================================================
+        # 3. VINCOLO MAC HARD — AP-CENTRIC
+        # ============================================================
+
+        # Step 1 — Pensiamo da punto di vista AP:
+        # vogliamo che OGNI AP scelga un nodo.
+        # Trasponiamo in [A, T, N]
+        logits_AP = ap_logits.permute(2, 1, 0)
+
+        # Step 2 — Straight Through Gumbel Softmax:
+        # Per ogni AP (dim=0) e ogni time slot (dim=1)
+        # scegliamo 1 nodo tra i N disponibili (dim=-1)
+        ap_onehot_AP = F.gumbel_softmax(
+            logits_AP, 
+            tau=0.5,
+            hard=True,
+            dim=-1
+        )  # [A, T, N]  ogni AP sceglie 1 nodo
+
+        # Step 3 — Ritorno a formato [N, T, A]
+        ap_onehot_final = ap_onehot_AP.permute(2, 1, 0)
+
+        # ==============================
+        # 4. SCHEDULING HARD DERIVATO
+        # ==============================
+        # Un nodo è attivo se almeno un AP lo ha scelto
+        sched_hard = (ap_onehot_final.sum(dim=-1) > 0).float()  # [N, T]
+
+        # ==============================
+        # OUTPUT
+        # ==============================
+        # - sched_hard è binario (solo per metriche)
+        # - ap_logits usato in training per la loss CE (differenziabile)
+        return sched_hard, ap_logits

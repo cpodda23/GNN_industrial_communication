@@ -95,24 +95,50 @@ def generate_csi(nodes_pos, ap_pos):
 # ===========================================================
 # Funzione 4: scheduling deterministico + AP selection
 # ===========================================================
-def generate_scheduling(nodes_pos, ap_pos):
-    schedule = np.zeros((NUM_NODES, TIME_SLOTS))
+NOISE_POWER = 1e-9  # Rumore termico (puoi adattarlo)
+EPS = 1e-12
 
-    # TDMA deterministico
-    slot = 0
-    for n in range(NUM_NODES):
-        schedule[n, slot] = 1
-        slot = (slot + 1) % TIME_SLOTS
+def generate_scheduling_ofdm(csi, num_nodes, num_ap, num_subcarriers, time_slots):
+    """
+    Scheduling basato su OFDM:
+    - ogni AP seleziona 1 nodo per timeslot
+    - la selezione dipende dal CSI OFDM reale
+    - è possibile avere più nodi attivi nello stesso slot (multi-AP)
+    """
 
-    # AP assignment basato sul pathloss minimo
-    ap_assign = []
-    for n in range(NUM_NODES):
-        distances = [np.linalg.norm(nodes_pos[n] - ap_pos[a]) for a in range(NUM_AP)]
-        pl_list = [pathloss(d) for d in distances]
-        best_ap = np.argmin(pl_list)
-        ap_assign.append(best_ap)
+    # Output
+    schedule = np.zeros((num_nodes, time_slots), dtype=np.float32)
+    ap_assign = -1 * np.ones((num_nodes, time_slots), dtype=np.int32)
 
-    return schedule, np.array(ap_assign)
+    # LOOP sui timeslot
+    for t in range(time_slots):
+
+        # Ogni AP assegna lo slot al nodo con migliore throughput
+        for a in range(num_ap):
+
+            # R[n] = throughput stimato OFDM per nodo n con AP a allo slot t
+            R = np.zeros(num_nodes)
+
+            for n in range(num_nodes):
+
+                # Magnitudo complesso per tutti i subcarrier
+                mag = csi[n, a, :, t, 0]      # shape [F]
+                # Possiamo interpretare il canale come H e stimare una SNR
+                H2 = mag ** 2
+                SNR = H2 / (NOISE_POWER + EPS)
+
+                # Throughput su tutti i subcarrier
+                R[n] = np.sum(np.log2(1 + SNR))
+
+            # Chi è il nodo migliore per questo AP e questo slot?
+            best_node = np.argmax(R)
+
+            # Aggiorna schedule
+            schedule[best_node, t] = 1.0
+            ap_assign[best_node, t] = a
+
+    return schedule, ap_assign
+
 
 
 # ===========================================================
@@ -127,7 +153,7 @@ def generate_dataset(num_samples=200):
 
         nodes_pos, ap_pos = generate_topology()
         csi = generate_csi(nodes_pos, ap_pos)
-        schedule, ap_assign = generate_scheduling(nodes_pos, ap_pos)
+        schedule, ap_assign = generate_scheduling_ofdm(csi, NUM_NODES, NUM_AP, FREQ_SUBCARRIERS, TIME_SLOTS)
 
         sample = {
             "nodes_pos": torch.tensor(nodes_pos, dtype=torch.float),
