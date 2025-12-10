@@ -1,20 +1,14 @@
-# =============================================================
-# wirelessNetwork.py — Grafo eterogeneo (device + AP)
-# =============================================================
-
 import numpy as np
 import torch
 import dgl
+from data_generation import NUM_NODES, NUM_AP
 
-# Parametri
-AREA_SIZE = 50
-NUM_NODES = 10
-NUM_AP = 3
-DIST_THRESHOLD = 30   # per archi device-device
-
+# Parameters
+AREA_SIZE = 50        # meters, factory area
+DIST_THRESHOLD = 30   # distance threshold for device-device edges
 
 # =============================================================
-# Generazione della topologia (device + AP)
+# Topology generation (device + AP)
 # =============================================================
 def generate_topology():
     nodes_pos = np.random.uniform(0, AREA_SIZE, size=(NUM_NODES, 2))
@@ -29,7 +23,7 @@ def generate_topology():
 
 
 # =============================================================
-# Modello pathloss industriale
+# Model industrial pathloss in indoor environment
 # =============================================================
 def pathloss(d):
     PL0 = -30
@@ -38,16 +32,16 @@ def pathloss(d):
 
 
 # =============================================================
-# Costruzione di un grafo ETEROGENEO per DGL
+# Construction of a HETEROGENEOUS graph for DGL
 # =============================================================
 def build_hetero_graph(nodes_pos, ap_pos):
     N = nodes_pos.shape[0]
     A = ap_pos.shape[0]
 
-    # Liste archi per ogni relazione
+    # Edge lists for each relation
     dd_src, dd_dst = [], []     # device → device
     da_src, da_dst = [], []     # device → ap
-    ad_src, ad_dst = [], []     # ap → device (opzionale ma molto utile)
+    ad_src, ad_dst = [], []     # ap → device (optional but very useful)
 
     # ----------- EDGE DEVICE → DEVICE -------------
     for i in range(N):
@@ -68,7 +62,7 @@ def build_hetero_graph(nodes_pos, ap_pos):
             ad_src.append(ap)
             ad_dst.append(i)  # reverse edge
 
-    # COSTRUZIONE DEL GRAFO ETEROGENEO
+    # CONSTRUCTION OF HETEROGENEOUS GRAPH
     graph_data = {
         ('device', 'dd', 'device'): (torch.tensor(dd_src), torch.tensor(dd_dst)),
         ('device', 'da', 'ap'):     (torch.tensor(da_src), torch.tensor(da_dst)),
@@ -77,7 +71,7 @@ def build_hetero_graph(nodes_pos, ap_pos):
 
     g = dgl.heterograph(graph_data)
 
-    # ----------- CALCOLO EDGE FEATURES (PATHLOSS) ------------
+    # ----------- CALCULATION OF EDGE FEATURES (PATHLOSS) ------------
 
     # DEVICE → DEVICE
     dd_pl = []
@@ -104,7 +98,7 @@ def build_hetero_graph(nodes_pos, ap_pos):
 
 
 # =============================================================
-# Funzione principale per creare l’ambiente wireless
+# Main function to create the wireless environment
 # =============================================================
 def create_wireless_environment():
     nodes_pos, ap_pos = generate_topology()
@@ -116,12 +110,8 @@ def create_wireless_environment():
         "graph": g
     }
 
-
-# =============================================================
-# Test
-# =============================================================
 if __name__ == "__main__":
     env = create_wireless_environment()
-    print("Grafo eterogeneo:", env["graph"])
-    print("Tipi di nodi:", env["graph"].ntypes)
-    print("Tipi di archi:", env["graph"].etypes)
+    print("Heterogeneous graph:", env["graph"])
+    print("Nodes types:", env["graph"].ntypes)
+    print("Edges types:", env["graph"].etypes)

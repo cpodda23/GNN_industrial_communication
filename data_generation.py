@@ -1,34 +1,25 @@
-# ===========================================================
-# data_generation.py — Versione INDUSTRIALE avanzata
-# Compatibile con GNN eterogenea device + AP
-# ===========================================================
-
 import torch
 import numpy as np
 import os
 
-# ===========================================================
-# Seeds (riproducibilità)
-# ===========================================================
+# Random seeds for reproducibility
 np.random.seed(0)
 torch.manual_seed(0)
 
-# ===========================================================
-# Parametri del sistema industriale
-# ===========================================================
-NUM_NODES = 10              # nodi industriali
+# Parameters of the industrial system
+NUM_NODES = 10              # industrial nodes
 NUM_AP = 3                  # Access Points
-FREQ_SUBCARRIERS = 32       # subcarrier OFDM
-TIME_SLOTS = 20             # simboli OFDM
-AREA_SIZE = 50              # metri, fabbrica
-DOPPLER_HZ = 5              # doppler indoor
-SHADOWING_STD = 2.0         # deviazione standard shadowing log-normal
+FREQ_SUBCARRIERS = 32       # OFDM subcarriers
+TIME_SLOTS = 40             # OFDM symbols
+AREA_SIZE = 50              # meters, factory area
+DOPPLER_HZ = 5              # indoor doppler
+SHADOWING_STD = 2.0         # log-normal shadowing standard deviation
 
 OUTPUT_DIR = "data"
 
 
 # ===========================================================
-# Funzione 1: genera topologia industriale
+# Function 1: generate industrial topology
 # ===========================================================
 def generate_topology():
     nodes_pos = np.random.uniform(0, AREA_SIZE, size=(NUM_NODES, 2))
@@ -43,7 +34,7 @@ def generate_topology():
 
 
 # ===========================================================
-# Funzione 2: modello di attenuazione
+# Function 2: pathloss model
 # ===========================================================
 def pathloss(d):
     PL0 = -30     # dB reference
@@ -53,13 +44,13 @@ def pathloss(d):
 
 
 # ===========================================================
-# Funzione 3: genera CSI OFDM COMPLETO (mag + phase)
+# Function 3: generate COMPLETE OFDM CSI (mag + phase)
 # ===========================================================
 def generate_csi(nodes_pos, ap_pos):
     """
-    Ritorna CSI shape:
+    Returns CSI shape:
     [NUM_NODES, NUM_AP, FREQ_SUBCARRIERS, TIME_SLOTS, 2]
-    Dove l'ultima dimensione è:
+    Where the last dimension is:
       [:,:,:, :, 0] = magnitude
       [:,:,:, :, 1] = phase
     """
@@ -69,11 +60,11 @@ def generate_csi(nodes_pos, ap_pos):
     for n in range(NUM_NODES):
         for ap in range(NUM_AP):
 
-            # distanza nodo-AP
+            # distance node-AP
             d = np.linalg.norm(nodes_pos[n] - ap_pos[ap])
             pl = pathloss(d)
 
-            # fading complesso variabile nel tempo
+            # complex fading variable over time
             H = np.zeros((FREQ_SUBCARRIERS, TIME_SLOTS), dtype=np.complex64)
 
             for t in range(TIME_SLOTS):
@@ -93,47 +84,47 @@ def generate_csi(nodes_pos, ap_pos):
 
 
 # ===========================================================
-# Funzione 4: scheduling deterministico + AP selection
+# Function 4: deterministic scheduling + AP selection
 # ===========================================================
-NOISE_POWER = 1e-9  # Rumore termico (puoi adattarlo)
+NOISE_POWER = 1e-9  # Thermal noise (can be adjusted)
 EPS = 1e-12
 
 def generate_scheduling_ofdm(csi, num_nodes, num_ap, num_subcarriers, time_slots):
     """
-    Scheduling basato su OFDM:
-    - ogni AP seleziona 1 nodo per timeslot
-    - la selezione dipende dal CSI OFDM reale
-    - è possibile avere più nodi attivi nello stesso slot (multi-AP)
+    Scheduling based on OFDM:
+    - each AP selects 1 node per timeslot
+    - selection depends on the real OFDM CSI
+    - multiple nodes can be active in the same slot (multi-AP)
     """
 
     # Output
     schedule = np.zeros((num_nodes, time_slots), dtype=np.float32)
     ap_assign = -1 * np.ones((num_nodes, time_slots), dtype=np.int32)
 
-    # LOOP sui timeslot
+    # LOOP over timeslots
     for t in range(time_slots):
 
-        # Ogni AP assegna lo slot al nodo con migliore throughput
+        # Each AP assigns the slot to the node with the best throughput
         for a in range(num_ap):
 
-            # R[n] = throughput stimato OFDM per nodo n con AP a allo slot t
+            # R[n] = estimated OFDM throughput for node n with AP a at slot t
             R = np.zeros(num_nodes)
 
             for n in range(num_nodes):
 
-                # Magnitudo complesso per tutti i subcarrier
+                # Complex magnitude for all subcarriers
                 mag = csi[n, a, :, t, 0]      # shape [F]
-                # Possiamo interpretare il canale come H e stimare una SNR
+                # We can interpret the channel as H and estimate an SNR
                 H2 = mag ** 2
                 SNR = H2 / (NOISE_POWER + EPS)
 
-                # Throughput su tutti i subcarrier
+                # Throughput over all subcarriers
                 R[n] = np.sum(np.log2(1 + SNR))
 
-            # Chi è il nodo migliore per questo AP e questo slot?
+            # Select best node for AP at slot t
             best_node = np.argmax(R)
 
-            # Aggiorna schedule
+            # Update schedule
             schedule[best_node, t] = 1.0
             ap_assign[best_node, t] = a
 
@@ -142,7 +133,7 @@ def generate_scheduling_ofdm(csi, num_nodes, num_ap, num_subcarriers, time_slots
 
 
 # ===========================================================
-# Funzione principale: generazione dataset
+# Main function: dataset generation
 # ===========================================================
 def generate_dataset(num_samples=200):
 
@@ -164,11 +155,8 @@ def generate_dataset(num_samples=200):
         }
 
         torch.save(sample, f"{OUTPUT_DIR}/sample_{i:04d}.pt")
-        print(f"[OK] Salvato sample {i}")
+        print(f"[OK] Sample saved {i}")
 
 
-# ===========================================================
-# MAIN
-# ===========================================================
 if __name__ == "__main__":
     generate_dataset(num_samples=50)

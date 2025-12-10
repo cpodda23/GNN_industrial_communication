@@ -9,10 +9,13 @@ from nets import IndustrialMAC_HeteroGNN
 from wirelessNetwork import build_hetero_graph
 
 
+EPOCHES = 30
+BATCH_SIZE = 1
+LEARNING_RATE = 1e-3
+
 # ===============================================================
 # Dataset Loader
 # ===============================================================
-
 class IndustrialDataset(torch.utils.data.Dataset):
     def __init__(self, data_dir="data"):
         self.files = sorted([f"{data_dir}/{f}" for f in os.listdir(data_dir) if f.endswith(".pt")])
@@ -38,9 +41,9 @@ class IndustrialDataset(torch.utils.data.Dataset):
 
 def train_model(
         data_dir="data",
-        lr=1e-3,
-        epochs=30,
-        batch_size=1,
+        lr=LEARNING_RATE,
+        epochs=EPOCHES,
+        batch_size=BATCH_SIZE,
         device="cuda" if torch.cuda.is_available() else "cpu"):
 
     dataset = IndustrialDataset(data_dir)
@@ -57,7 +60,7 @@ def train_model(
         for batch in loader:
 
             # ------------------------------
-            # Caricamento tensori
+            # Loading tensors
             # ------------------------------
             device_pos  = batch["device_pos"].squeeze(0).to(device)   # [N,2]
             ap_pos      = batch["ap_pos"].squeeze(0).to(device)       # [A,2]
@@ -67,7 +70,7 @@ def train_model(
             target_ap    = batch["ap_assign"].squeeze(0).to(device)   # [N,T]
 
             # ------------------------------
-            # Costruzione grafo
+            # Graph construction
             # ------------------------------
             g = build_hetero_graph(device_pos.cpu().numpy(),
                                    ap_pos.cpu().numpy())
@@ -77,17 +80,17 @@ def train_model(
             # Forward
             # ------------------------------
             pred_sched_hard, pred_ap_logits = model(g, device_pos, ap_pos, csi)
-            # pred_ap_logits : [N, T, A]  (logits differenziabili)
+            # pred_ap_logits : [N, T, A]  (differentiable logits)
 
             N, T, A = pred_ap_logits.shape
 
             # ------------------------------
-            # PREPARAZIONE PER CROSS-ENTROPY
+            # PREPARATION FOR CROSS-ENTROPY
             # ------------------------------
             logits = pred_ap_logits.reshape(N*T, A)
             targets = target_ap.reshape(N*T)
 
-            # Consideriamo solo slot realmente attivi
+            # Consider only slots where the node actually transmits
             mask = target_sched.reshape(N*T) > 0.5
 
             logits = logits[mask]        # [K, A]
@@ -110,19 +113,16 @@ def train_model(
         print(f"[Epoch {epoch+1}/{epochs}] Loss = {total_loss:.4f}")
 
         # ------------------------------
-        # Checkpoint ogni 5 epoch
+        # Checkpoint every 5 epochs
         # ------------------------------
         if (epoch+1) % 5 == 0:
             path = f"model_epoch_{epoch+1}.pth"
             torch.save(model.state_dict(), path)
-            print(f"Salvato modello: {path}")
+            print(f"Saved model: {path}")
 
-    print("\nTraining completato.\n")
+    print("\nTraining completed.\n")
     return model
 
 
-# ===============================================================
-# Main
-# ===============================================================
 if __name__ == "__main__":
     train_model()

@@ -1,7 +1,7 @@
 import matplotlib.pyplot as plt
 from matplotlib.colors import ListedColormap
-
 import numpy as np
+from data_generation import NUM_AP, FREQ_SUBCARRIERS
 
 def plot_node_time_scheduling(pred_sched, pred_ap_onehot, true_sched=None):
     """
@@ -45,7 +45,7 @@ def plot_ap_time_assignment(pred_ap_onehot):
     plt.show()
 
 
-def plot_ofdm_grid(pred_ap_onehot, num_subcarriers=32):
+def plot_ofdm_grid(pred_ap_onehot, num_subcarriers=FREQ_SUBCARRIERS):
     """
     Visualizza una griglia OFDM (frequenza × tempo).
     Ogni slot assume il colore dell'AP assegnato.
@@ -72,7 +72,7 @@ def plot_ofdm_grid(pred_ap_onehot, num_subcarriers=32):
 
 
 def plot_ofdm_time_frequency_window(pred_sched, pred_ap_onehot,
-                                    num_subcarriers=32,
+                                    num_subcarriers=FREQ_SUBCARRIERS,
                                     t_start=0,
                                     window_size=None):
     """
@@ -116,7 +116,7 @@ def plot_ofdm_time_frequency_window(pred_sched, pred_ap_onehot,
 
     # 4. colormap: bianco per inattivo (se lo usi), 3 colori per AP
     cmap_ap = ListedColormap([
-        "white",      # 0 → opzionale (inattivo, qui non usato)
+        "white",     # -1 → inattivo"
         "#1f77b4",    # 1 → AP0
         "#d62728",    # 2 → AP1
         "#2ca02c"     # 3 → AP2
@@ -155,7 +155,7 @@ def plot_ofdm_time_frequency_window(pred_sched, pred_ap_onehot,
     plt.show()
     
 def plot_all_doppler_windows(pred_sched, pred_ap_onehot,
-                             num_subcarriers=32,
+                             num_subcarriers=FREQ_SUBCARRIERS,
                              window_size=5):
     """
     Genera tutte le "fotografie Doppler" consecutive dell'intervallo totale.

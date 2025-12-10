@@ -4,20 +4,17 @@ import torch.nn.functional as F
 import dgl
 from dgl.nn import HeteroGraphConv, GraphConv
 
+from data_generation import NUM_AP, TIME_SLOTS, FREQ_SUBCARRIERS
 
-# ===========================================================
-# CSI Encoder (uguale alla versione precedente)
-# ===========================================================
 
 class CSIEncoder(nn.Module):
     """
     Converte CSI 3D (FREQ x TIME x 2) in embedding 1D.
     Ora gestisce CSI completo: magnitude + phase.
     """
-    def __init__(self, freq=32, time=20, channels=2, hidden=64):
+    def __init__(self, freq=FREQ_SUBCARRIERS, time=TIME_SLOTS, channels=2, hidden=64):
         super().__init__()
 
-        # Adesso abbiamo 2 canali in ingresso (mag + fase)
         self.conv = nn.Sequential(
             nn.Conv2d(channels, 16, kernel_size=3, padding=1),
             nn.ReLU(),
@@ -39,10 +36,10 @@ class CSIEncoder(nn.Module):
         embeds = []
         for ap in range(AP):
 
-            # estrai CSI per AP specifico → [N, F, T, 2]
+            # extract CSI for specific AP → [N, F, T, 2]
             x = csi[:, ap]
 
-            # permuta per CNN → [N, 2, F, T]
+            # permute for CNN → [N, 2, F, T]
             x = x.permute(0, 3, 1, 2)
 
             x = self.conv(x)
@@ -50,13 +47,9 @@ class CSIEncoder(nn.Module):
             x = self.fc(x)
             embeds.append(x)
 
-        # output finale: [N, AP, hidden]
+        # final output: [N, AP, hidden]
         return torch.stack(embeds, dim=1)
 
-
-# ===========================================================
-# Node Encoder
-# ===========================================================
 
 class DeviceEncoder(nn.Module):
     def __init__(self, ap_count, hidden=64):
@@ -67,8 +60,6 @@ class DeviceEncoder(nn.Module):
             nn.ReLU()
         )
 
-        # CSI embedding produce [N, AP, hidden]
-        # Flatten + FC
         self.csi_fc = nn.Sequential(
             nn.Linear(ap_count * hidden, 64),
             nn.ReLU()
@@ -99,13 +90,9 @@ class APEncoder(nn.Module):
         return self.ap_fc(ap_pos)
 
 
-# ===========================================================
-# Heterogeneous GNN
-# ===========================================================
-
 class IndustrialMAC_HeteroGNN(nn.Module):
 
-    def __init__(self, num_ap=3, time_slots=20):
+    def __init__(self, num_ap=NUM_AP, time_slots=TIME_SLOTS):
         super().__init__()
 
         self.csi_encoder = CSIEncoder()
@@ -136,16 +123,15 @@ class IndustrialMAC_HeteroGNN(nn.Module):
         self.ap_head = nn.Sequential(
         nn.Linear(64, 64),
         nn.ReLU(),
-        nn.Linear(64, time_slots * num_ap)  # output flat, shape per nodo
+        nn.Linear(64, time_slots * num_ap) # Output logits per time slot and AP
     )
         self.time_slots = time_slots
         self.num_ap = num_ap
 
 
     def forward(self, g, device_pos, ap_pos, csi):
-        # ==============================
-        # 1. ENCODING
-        # ==============================
+        # encode node features
+        # csi shape: [N, AP, F, T, 2]
         csi_embed = self.csi_encoder(csi)
         h_device = self.device_encoder(device_pos, csi_embed)
         h_ap = self.ap_encoder(ap_pos)
@@ -158,43 +144,35 @@ class IndustrialMAC_HeteroGNN(nn.Module):
         h = self.conv2(g, h)
         h = {k: F.relu(v) for k, v in h.items()}
 
-        # ==============================
-        # 2. LOGITS PER NODO/TIME/AP
-        # ==============================
+        # logits shape: [N, T]
         ap_logits = self.ap_head(h["device"])  # [N, T*A]
         ap_logits = ap_logits.view(-1, self.time_slots, self.num_ap)  # [N, T, A]
 
-        # ============================================================
-        # 3. VINCOLO MAC HARD — AP-CENTRIC
-        # ============================================================
 
-        # Step 1 — Pensiamo da punto di vista AP:
-        # vogliamo che OGNI AP scelga un nodo.
-        # Trasponiamo in [A, T, N]
+        # Step 1 — Think from AP perspective: we want EACH AP to choose a node.
+        # Transpose to [A, T, N]
         logits_AP = ap_logits.permute(2, 1, 0)
 
         # Step 2 — Straight Through Gumbel Softmax:
-        # Per ogni AP (dim=0) e ogni time slot (dim=1)
-        # scegliamo 1 nodo tra i N disponibili (dim=-1)
+        # For each AP (dim=0) and each time slot (dim=1)
+        # choose 1 node among the N available (dim=-1)
         ap_onehot_AP = F.gumbel_softmax(
             logits_AP, 
             tau=0.5,
             hard=True,
             dim=-1
-        )  # [A, T, N]  ogni AP sceglie 1 nodo
+        )  # [A, T, N]  each AP chooses 1 node
 
-        # Step 3 — Ritorno a formato [N, T, A]
+        # Step 3 — Return to format [N, T, A]
         ap_onehot_final = ap_onehot_AP.permute(2, 1, 0)
 
-        # ==============================
-        # 4. SCHEDULING HARD DERIVATO
-        # ==============================
-        # Un nodo è attivo se almeno un AP lo ha scelto
+        # scheduling hard decisions: [N, T]
+        # A node is active if at least one AP has chosen it
         sched_hard = (ap_onehot_final.sum(dim=-1) > 0).float()  # [N, T]
 
         # ==============================
         # OUTPUT
         # ==============================
-        # - sched_hard è binario (solo per metriche)
-        # - ap_logits usato in training per la loss CE (differenziabile)
+        # - sched_hard is binary (only for metrics)
+        # - ap_logits used in training for CE loss (differentiable)
         return sched_hard, ap_logits
