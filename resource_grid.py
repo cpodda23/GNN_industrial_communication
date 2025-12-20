@@ -1,5 +1,8 @@
 import matplotlib.pyplot as plt
+import matplotlib.patches as patches
 from matplotlib.colors import ListedColormap
+from matplotlib.lines import Line2D
+import matplotlib.animation as animation
 import numpy as np
 from data_generation import NUM_AP, FREQ_SUBCARRIERS
 
@@ -173,5 +176,177 @@ def plot_all_doppler_windows(pred_sched, pred_ap_onehot,
             window_size=window_size
         )
         t_start += window_size
+    
 
 
+def plot_resource_grid(
+    pred_sched,
+    pred_ap_onehot,
+    num_ap,
+    num_subcarriers,
+    title="OFDM Resource Grid",
+):
+    # ---- numpy conversion ----
+    if hasattr(pred_sched, "detach"):
+        pred_sched = pred_sched.detach().cpu().numpy()
+    if hasattr(pred_ap_onehot, "detach"):
+        pred_ap_onehot = pred_ap_onehot.detach().cpu().numpy()
+
+    N, T = pred_sched.shape
+
+    # ---- AP frequency partition (CORRETTA) ----
+    base = num_subcarriers // num_ap
+    remainder = num_subcarriers % num_ap
+
+    ap_ranges = []
+    for a in range(num_ap):
+        start = a * base + min(a, remainder)
+        end = start + base + (1 if a < remainder else 0)
+        ap_ranges.append((start, end))
+
+    # ---- packet counter per nodo ----
+    packet_counter = np.zeros(N, dtype=int)
+
+    # ---- plot ----
+    fig, ax = plt.subplots(figsize=(14, 6))
+    ap_colors = plt.cm.tab10.colors
+
+    for t in range(T):
+        active_nodes = np.where(pred_sched[:, t] > 0.5)[0]
+        ap_to_nodes = {a: [] for a in range(num_ap)}
+
+        for n in active_nodes:
+            a = int(np.argmax(pred_ap_onehot[n, t]))
+            ap_to_nodes[a].append(n)
+
+        for a, nodes in ap_to_nodes.items():
+            if not nodes:
+                continue
+
+            f0, f1 = ap_ranges[a]
+            height = f1 - f0
+
+            rect = patches.Rectangle(
+                (t, f0), 1, height,
+                facecolor=ap_colors[a],
+                alpha=0.6,
+                edgecolor="black",
+                linewidth=0.8
+            )
+            ax.add_patch(rect)
+
+            yc = (f0 + f1) / 2
+
+            if len(nodes) == 1:
+                n = nodes[0]
+                p = packet_counter[n]
+                packet_counter[n] += 1
+
+                ax.text(
+                    t + 0.5, yc,
+                    f"N={n}, P={p}",
+                    ha="center", va="center",
+                    fontsize=9, weight="bold"
+                )
+            else:
+                rect.set_edgecolor("red")
+                rect.set_linewidth(2)
+                ax.text(
+                    t + 0.5, yc,
+                    f"COLL\n{nodes}",
+                    ha="center", va="center",
+                    fontsize=8, color="red", weight="bold"
+                )
+
+    # ---- legenda AP → colore ----
+    legend_elements = [
+        Line2D([0], [0], color=ap_colors[a], lw=6, label=f"AP {a}")
+        for a in range(num_ap)
+    ]
+    ax.legend(
+        handles=legend_elements,
+        title="Access Points",
+        loc="upper right"
+    )
+
+    # ---- axes ----
+    ax.set_xlim(0, T)
+    ax.set_ylim(0, num_subcarriers)
+    ax.set_xlabel("Time slots (t)")
+    ax.set_ylabel("Subcarriers (f)")
+    ax.set_title(title)
+    ax.grid(True, axis="x", linestyle="--", alpha=0.3)
+
+    plt.tight_layout()
+    plt.show()
+    
+def animate_resource_grid(
+    pred_sched,
+    pred_ap_onehot,
+    num_ap,
+    num_subcarriers,
+    interval=600,
+):
+    if hasattr(pred_sched, "detach"):
+        pred_sched = pred_sched.detach().cpu().numpy()
+    if hasattr(pred_ap_onehot, "detach"):
+        pred_ap_onehot = pred_ap_onehot.detach().cpu().numpy()
+
+    N, T = pred_sched.shape
+
+    base = num_subcarriers // num_ap
+    remainder = num_subcarriers % num_ap
+
+    ap_ranges = []
+    for a in range(num_ap):
+        start = a * base + min(a, remainder)
+        end = start + base + (1 if a < remainder else 0)
+        ap_ranges.append((start, end))
+
+    packet_counter = np.zeros(N, dtype=int)
+    ap_colors = plt.cm.tab10.colors
+
+    fig, ax = plt.subplots(figsize=(10, 5))
+
+    def update(t):
+        ax.clear()
+        ax.set_xlim(0, 1)
+        ax.set_ylim(0, num_subcarriers)
+        ax.set_title(f"OFDM Resource Grid – slot t={t}")
+        ax.set_xlabel("Time slot")
+        ax.set_ylabel("Subcarriers")
+
+        active_nodes = np.where(pred_sched[:, t] > 0.5)[0]
+        ap_to_nodes = {a: [] for a in range(num_ap)}
+
+        for n in active_nodes:
+            a = int(np.argmax(pred_ap_onehot[n, t]))
+            ap_to_nodes[a].append(n)
+
+        for a, nodes in ap_to_nodes.items():
+            if not nodes:
+                continue
+
+            f0, f1 = ap_ranges[a]
+            rect = patches.Rectangle(
+                (0, f0), 1, f1 - f0,
+                facecolor=ap_colors[a],
+                alpha=0.6,
+                edgecolor="black"
+            )
+            ax.add_patch(rect)
+
+            yc = (f0 + f1) / 2
+
+            if len(nodes) == 1:
+                n = nodes[0]
+                p = packet_counter[n]
+                packet_counter[n] += 1
+                ax.text(0.5, yc, f"N={n}, P={p}", ha="center", va="center", fontsize=10)
+            else:
+                rect.set_edgecolor("red")
+                rect.set_linewidth(2)
+                ax.text(0.5, yc, f"COLL {nodes}", ha="center", va="center", color="red")
+
+    ani = animation.FuncAnimation(fig, update, frames=T, interval=interval)
+    plt.show()

@@ -5,7 +5,7 @@ import numpy as np
 from nets import IndustrialMAC_HeteroGNN
 from training import IndustrialDataset
 from wirelessNetwork import build_hetero_graph
-from resource_grid import plot_node_time_scheduling, plot_ap_time_assignment, plot_ofdm_grid, plot_ofdm_time_frequency_window, plot_all_doppler_windows
+from resource_grid import animate_resource_grid
 from data_generation import NUM_AP, FREQ_SUBCARRIERS, DOPPLER_HZ
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
@@ -58,6 +58,21 @@ def collision_score(pred_sched, num_ap=NUM_AP):
     # Difference from ideal value (num_ap)
     diff = torch.abs(per_slot - num_ap)
     return diff.mean().item()
+
+
+def transmission_completion_accuracy(pred_sched, node_packets):
+    """
+    Checks if all packets have been transmitted by each node within the available time slots.
+    A node must have completed all its packet transmissions.
+    """
+    completion = np.zeros_like(node_packets, dtype=np.float32)
+    for n in range(len(node_packets)):
+        # Check if the node has completed all its packets
+        transmitted_packets = np.sum(pred_sched[n, :] > 0.5)  # Count slots where node is transmitting
+        if transmitted_packets >= node_packets[n]:
+            completion[n] = 1.0  # Mark as successful completion
+    # Calculate the fraction of nodes that completed their transmissions
+    return np.mean(completion)
     
 
 # ===============================================================
@@ -65,7 +80,7 @@ def collision_score(pred_sched, num_ap=NUM_AP):
 # ===============================================================
 
 def test_model(
-        model_path="model_epoch_30.pth",
+        model_path="model_epoch_50.pth",
         data_dir="data",
         num_samples=20):
 
@@ -81,6 +96,7 @@ def test_model(
     sched_acc_list = []
     ap_acc_list = []
     coll_list = []
+    trans_comp_acc_list = []
 
     with torch.no_grad():
         for i, batch in enumerate(loader):
@@ -94,37 +110,55 @@ def test_model(
 
             true_sched = batch["schedule"].squeeze(0).to(DEVICE)
             true_ap    = batch["ap_assign"].squeeze(0).to(DEVICE)
+            node_packets_tensor = batch["node_packets"].squeeze(0).to(DEVICE)
+            node_packets_numpy = batch["node_packets"].squeeze(0).cpu().numpy()
 
             # Graph construction
             g = build_hetero_graph(device_pos.cpu().numpy(), ap_pos.cpu().numpy())
             g = g.to(DEVICE)
 
             # Forward
-            pred_sched, pred_ap_onehot = model(g, device_pos, ap_pos, csi)
+            pred_sched, pred_ap_onehot, _ = model(g, device_pos, ap_pos, csi, node_packets_tensor)
 
             # Metrics
             sa = scheduling_accuracy(pred_sched, true_sched)
             aa = ap_accuracy(pred_ap_onehot, true_ap, true_sched)
             cs = collision_score(pred_sched, num_ap=pred_ap_onehot.shape[-1])
+            
+            trans_comp_acc = transmission_completion_accuracy(pred_sched.cpu().numpy(), node_packets_numpy)
 
             sched_acc_list.append(sa)
             ap_acc_list.append(aa)
             coll_list.append(cs)
+            trans_comp_acc_list.append(trans_comp_acc)
+
 
             print(f"[Sample {i}]")
             print(f"  Scheduling accuracy: {sa:.4f}")
             print(f"  AP accuracy:         {aa:.4f}")
             print(f"  Collision score:     {cs:.4f}")
+            print(f"  Transmission completion accuracy: {trans_comp_acc:.4f}")
+
             
             # Visualizations for the first sample
-            if i<4:
-                plot_all_doppler_windows(pred_sched, pred_ap_onehot, FREQ_SUBCARRIERS, DOPPLER_HZ)
+            #if i<4:
+             #   plot_all_doppler_windows(pred_sched, pred_ap_onehot, FREQ_SUBCARRIERS, DOPPLER_HZ)
+            #if i < 1:  # ad esempio solo il primo sample
+             #   animate_resource_grid(
+              #      pred_sched,            # [N,T] hard
+               #     pred_ap_onehot,        # [N,T,A]
+                #    num_ap=NUM_AP,
+                 #   num_subcarriers=FREQ_SUBCARRIERS
+                #)
+
 
     # Final report
     print("\n==================== FINAL RESULTS ====================")
     print(f"Scheduling accuracy average: {np.mean(sched_acc_list):.4f}")
     print(f"AP accuracy average:         {np.mean(ap_acc_list):.4f}")
     print(f"Collision score average:     {np.mean(coll_list):.4f}")
+    print(f"Transmission completion accuracy average: {np.mean(trans_comp_acc_list):.4f}")
+
     print("==========================================================")
 
     
@@ -133,7 +167,9 @@ def test_model(
     return {
         "sched_acc": np.mean(sched_acc_list),
         "ap_acc":   np.mean(ap_acc_list),
-        "collision": np.mean(coll_list)
+        "collision": np.mean(coll_list),
+        "trans_comp_acc": np.mean(trans_comp_acc_list)
+
     }
 
 

@@ -1,5 +1,4 @@
 import torch
-import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
 from torch.utils.data import DataLoader
@@ -8,10 +7,10 @@ import os
 from nets import IndustrialMAC_HeteroGNN
 from wirelessNetwork import build_hetero_graph
 
-
-EPOCHES = 30
+EPOCHES = 50
 BATCH_SIZE = 1
 LEARNING_RATE = 1e-3
+
 
 # ===============================================================
 # Dataset Loader
@@ -31,7 +30,8 @@ class IndustrialDataset(torch.utils.data.Dataset):
             "ap_pos": sample["ap_pos"],              # [N_ap,2]
             "csi": sample["csi"],                    # [N_dev,N_ap,F,T,2]
             "schedule": sample["schedule"],          # [N_dev,T]
-            "ap_assign": sample["ap_assign"]         # [N_dev,T]
+            "ap_assign": sample["ap_assign"],        # [N_dev,T]
+            "node_packets": sample["node_packets"]   # [N_dev]
         }
 
 
@@ -56,6 +56,8 @@ def train_model(
 
     for epoch in range(epochs):
         total_loss = 0.0
+        total_comp_loss = 0.0
+        total_ce_loss = 0.0
 
         for batch in loader:
 
@@ -68,6 +70,7 @@ def train_model(
 
             target_sched = batch["schedule"].squeeze(0).to(device)    # [N,T]
             target_ap    = batch["ap_assign"].squeeze(0).to(device)   # [N,T]
+            node_packets = batch["node_packets"].squeeze(0).to(device)   # [N]
 
             # ------------------------------
             # Graph construction
@@ -79,38 +82,46 @@ def train_model(
             # ------------------------------
             # Forward
             # ------------------------------
-            pred_sched_hard, pred_ap_logits = model(g, device_pos, ap_pos, csi)
-            # pred_ap_logits : [N, T, A]  (differentiable logits)
+            pred_sched_hard, pred_ap_logits, pred_sched_soft = model(g, device_pos, ap_pos, csi, node_packets)
 
             N, T, A = pred_ap_logits.shape
 
             # ------------------------------
-            # PREPARATION FOR CROSS-ENTROPY
+            # LOSS 1: Cross Entropy (which AP is assigned)
             # ------------------------------
             logits = pred_ap_logits.reshape(N*T, A)
             targets = target_ap.reshape(N*T)
 
             # Consider only slots where the node actually transmits
             mask = target_sched.reshape(N*T) > 0.5
+            
+            loss_ce = torch.tensor(0.0, device=device)
+            if mask.sum() > 0:
+                loss_ce = F.cross_entropy(logits[mask], targets[mask].long())
 
-            logits = logits[mask]        # [K, A]
-            targets = targets[mask]      # [K]
-
-            if logits.numel() == 0:
-                loss = torch.tensor(0.0, device=device)
-            else:
-                loss = F.cross_entropy(logits, targets.long())
-
+            # ------------------------------
+            # LOSS 2: Completion Loss (how many slots allocated vs packets to send)
+            # ------------------------------
+            loss_comp = calculate_completion_loss(pred_sched_soft, node_packets)
+            
+            
+            # calculate loss with weighted sum of both losses
+            loss = loss_ce + 0.25 * loss_comp
+            
             # ------------------------------
             # Backprop
             # ------------------------------
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
-
+            
+            # Calculate total losses by summing over every batch
             total_loss += loss.item()
-
-        print(f"[Epoch {epoch+1}/{epochs}] Loss = {total_loss:.4f}")
+            total_ce_loss += loss_ce.item()
+            total_comp_loss += loss_comp.item()
+            
+        print("\n====================  Total losses (sum on all batches) ====================")
+        print(f"[Epoch {epoch+1}/{epochs}] Loss = {total_loss:.4f} | CE: {total_ce_loss:.4f} | Comp: {total_comp_loss:.4f}")
 
         # ------------------------------
         # Checkpoint every 5 epochs
@@ -120,9 +131,28 @@ def train_model(
             torch.save(model.state_dict(), path)
             print(f"Saved model: {path}")
 
+        # for the last epoch print its losses for 1 sample only
+        if epoch == epochs - 1:
+                print("\n====================  Losses on single sample ====================")
+                print(f"[Epoch {epoch+1}/{epochs}] Loss = {total_loss/len(loader):.4f} | CE: {total_ce_loss/len(loader):.4f} | Comp: {total_comp_loss/len(loader):.4f}")
+
     print("\nTraining completed.\n")
     return model
 
+# ===============================================================
+# Transmission Completion Loss Calculation
+# ===============================================================
+
+def calculate_completion_loss(pred_sched_soft, node_packets):
+
+    # Calculate the capacity allocated by summing probabilities over Time slots
+    allocated_capacity = torch.sum(pred_sched_soft, dim=1) # [N]
+    diff = node_packets.float() - allocated_capacity
+
+    # Penalize missing packets, if positive diff: weight = 1.0
+    # Penalize extra packets if negative diff: weight = 0.1
+    loss = torch.where(diff > 0, diff, diff * -0.1)
+    return torch.mean(torch.abs(loss))
 
 if __name__ == "__main__":
     train_model()

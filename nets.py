@@ -6,15 +6,19 @@ from dgl.nn import HeteroGraphConv, GraphConv
 
 from data_generation import NUM_AP, TIME_SLOTS, FREQ_SUBCARRIERS
 
+"""
+Step 1: Raw data (CSI) -> CNN (CSIEncoder) -> Vector Feature 
+Step 2: Vector Feature + Position + Packets -> GNN (HeteroGraphConv) -> Final Decision
+"""
 
 class CSIEncoder(nn.Module):
     """
-    Converte CSI 3D (FREQ x TIME x 2) in embedding 1D.
-    Ora gestisce CSI completo: magnitude + phase.
+    Convert CSI 3D (FREQ x TIME x 2) in embedding 1D
     """
     def __init__(self, freq=FREQ_SUBCARRIERS, time=TIME_SLOTS, channels=2, hidden=64):
         super().__init__()
 
+        # Simple CNN with 2 convolutional layers (conv) and 1 Fully Connected layer (fc)
         self.conv = nn.Sequential(
             nn.Conv2d(channels, 16, kernel_size=3, padding=1),
             nn.ReLU(),
@@ -52,26 +56,33 @@ class CSIEncoder(nn.Module):
 
 
 class DeviceEncoder(nn.Module):
+    """
+    Convert device position + num_packets + CSI embedding into device node features as embedding
+    Use it to encode device nodes in the graph
+    """
     def __init__(self, ap_count, hidden=64):
         super().__init__()
 
+        # MLP for position + num_packets
         self.pos_fc = nn.Sequential(
-            nn.Linear(2, 16),
+            nn.Linear(3, 16), # 3 for pos(x,y) + num_packets
             nn.ReLU()
         )
-
+        # MLP for CSI embedding
         self.csi_fc = nn.Sequential(
             nn.Linear(ap_count * hidden, 64),
             nn.ReLU()
         )
-
+        # MLP to merge both
         self.merge = nn.Sequential(
             nn.Linear(16 + 64, 64),
             nn.ReLU()
         )
-
-    def forward(self, pos, csi_embed):
-        pos_f = self.pos_fc(pos)
+    # Forward method to process inputs
+    def forward(self, pos, csi_embed, node_packets):
+        packets_in = node_packets.view(-1, 1).float()
+        inputs = torch.cat([pos, packets_in], dim=1)
+        pos_f = self.pos_fc(inputs)
         flatten_csi = csi_embed.flatten(1)
         csi_f = self.csi_fc(flatten_csi)
 
@@ -79,8 +90,13 @@ class DeviceEncoder(nn.Module):
 
 
 class APEncoder(nn.Module):
+    """_summary_
+    Convert AP position (x,y) into AP node features as embedding
+    Use it to encode AP nodes in the graph
+    """
     def __init__(self):
         super().__init__()
+        # MLP for AP position
         self.ap_fc = nn.Sequential(
             nn.Linear(2, 64),
             nn.ReLU()
@@ -91,7 +107,17 @@ class APEncoder(nn.Module):
 
 
 class IndustrialMAC_HeteroGNN(nn.Module):
-
+    """
+    Heterogeneous GNN for Industrial IoT MAC Scheduling
+    1. Encode node features (device and AP)
+    2. Apply heterogeneous graph convolutions
+    3. Output scheduling and AP selection logits
+    4. Use Gumbel-Softmax for differentiable AP selection
+    5. Return hard scheduling decisions and logits for training
+    6. Designed for multiple APs and time slots
+    7. Training mode: stochastic Gumbel-Softmax
+    8. Evaluation mode: deterministic argmax
+    """
     def __init__(self, num_ap=NUM_AP, time_slots=TIME_SLOTS):
         super().__init__()
 
@@ -99,7 +125,7 @@ class IndustrialMAC_HeteroGNN(nn.Module):
         self.device_encoder = DeviceEncoder(num_ap)
         self.ap_encoder = APEncoder()
 
-        # Heterogeneous convolution layers
+        # GNN layers using HeteroGraphConv from DGL
         self.conv1 = HeteroGraphConv({
         ('device','dd','device'): GraphConv(64, 64),
         ('device','da','ap'):     GraphConv(64, 64),
@@ -129,11 +155,11 @@ class IndustrialMAC_HeteroGNN(nn.Module):
         self.num_ap = num_ap
 
 
-    def forward(self, g, device_pos, ap_pos, csi):
+    def forward(self, g, device_pos, ap_pos, csi, node_packets):
         # encode node features
         # csi shape: [N, AP, F, T, 2]
         csi_embed = self.csi_encoder(csi)
-        h_device = self.device_encoder(device_pos, csi_embed)
+        h_device = self.device_encoder(device_pos, csi_embed, node_packets)
         h_ap = self.ap_encoder(ap_pos)
 
         h = {"device": h_device, "ap": h_ap}
@@ -153,18 +179,35 @@ class IndustrialMAC_HeteroGNN(nn.Module):
         # Transpose to [A, T, N]
         logits_AP = ap_logits.permute(2, 1, 0)
 
-        # Step 2 — Straight Through Gumbel Softmax:
-        # For each AP (dim=0) and each time slot (dim=1)
-        # choose 1 node among the N available (dim=-1)
-        ap_onehot_AP = F.gumbel_softmax(
-            logits_AP, 
-            tau=0.5,
-            hard=True,
-            dim=-1
-        )  # [A, T, N]  each AP chooses 1 node
+        # Step 2 — Straight Through Gumbel Softmax but deterministic in eval        
+        if self.training:
+            # --- TRAINING MODE (Stochastic) ---
+            # Use Gumbel-Softmax with noise for exploration and gradients.
+            # hard=False gives soft vectors for backprop.
+            ap_soft_AP = F.gumbel_softmax(logits_AP, tau=0.2, hard=False, dim=-1)
+            
+            # for hard decision, take ARGMAX
+            index = ap_soft_AP.argmax(dim=-1, keepdim=True)
+            ap_hard_AP = torch.zeros_like(ap_soft_AP).scatter_(-1, index, 1.0)
+            ap_onehot_AP = ap_hard_AP - ap_soft_AP.detach() + ap_soft_AP
+
+        else:
+            # --- EVAL MODE (Deterministic) ---
+            # No Gumbel noise. Take ARGMAX of logits.
+            # This ensures: Same Input -> Same Output.
+            
+            # Compute clean Softmax (no noise) for completion loss (optional in test)
+            ap_soft_AP = F.softmax(logits_AP, dim=-1)
+
+            # Deterministic hard decision
+            index = logits_AP.argmax(dim=-1, keepdim=True)
+            ap_onehot_AP = torch.zeros_like(logits_AP).scatter_(-1, index, 1.0)
 
         # Step 3 — Return to format [N, T, A]
         ap_onehot_final = ap_onehot_AP.permute(2, 1, 0)
+        
+        # [A, T, N] -> sum(0) -> [T, N] -> permute -> [N, T]
+        sched_soft = ap_soft_AP.sum(dim=0).permute(1, 0)
 
         # scheduling hard decisions: [N, T]
         # A node is active if at least one AP has chosen it
@@ -175,4 +218,5 @@ class IndustrialMAC_HeteroGNN(nn.Module):
         # ==============================
         # - sched_hard is binary (only for metrics)
         # - ap_logits used in training for CE loss (differentiable)
-        return sched_hard, ap_logits
+        # - sched_soft used in training for completion loss (differentiable)
+        return sched_hard, ap_logits, sched_soft
