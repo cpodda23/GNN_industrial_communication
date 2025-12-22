@@ -5,8 +5,8 @@ import numpy as np
 from nets import IndustrialMAC_HeteroGNN
 from training import IndustrialDataset
 from wirelessNetwork import build_hetero_graph
-from resource_grid import animate_resource_grid
-from data_generation import NUM_AP, FREQ_SUBCARRIERS, DOPPLER_HZ
+from data_generation import NUM_AP, FREQ_SUBCARRIERS, TIME_SLOTS
+from resource_grid import visualize_ofdm_grid
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
 
@@ -16,6 +16,8 @@ DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
 def scheduling_accuracy(pred_sched, true_sched):
     """
+    Calculates the scheduling accuracy as the fraction of correctly predicted scheduling decisions.
+    
     pred_sched: [N,T] binary (0/1) — obtained from ap_onehot_final
     true_sched: [N,T] binary
     """
@@ -25,6 +27,8 @@ def scheduling_accuracy(pred_sched, true_sched):
 
 def ap_accuracy(pred_ap_onehot, true_ap, true_sched):
     """
+    Calculates the accuracy of AP assignment only on the slots where the node is scheduled to transmit.
+    
     pred_ap_onehot: [N, T, A] one-hot (hard)
     true_ap:         [N, T]     AP assigned in the dataset
     true_sched:      [N, T]     active slots in the dataset
@@ -47,10 +51,10 @@ def ap_accuracy(pred_ap_onehot, true_ap, true_sched):
 
 def collision_score(pred_sched, num_ap=NUM_AP):
     """
-    In a MAC system with multiple APs (NUM_AP),
-    the ideal scheduling has NUM_AP transmissions per slot.
+    In a MAC system with multiple APs (NUM_AP), the ideal scheduling has NUM_AP transmissions per slot.
 
-    Collision score = average deviation from the ideal value.
+    Collision score = average deviation from the ideal value, calculated as:
+        |(number of nodes transmitting at t) - NUM_AP|
     """
 
     # pred_sched: [N,T]
@@ -82,7 +86,7 @@ def transmission_completion_accuracy(pred_sched, node_packets):
 def test_model(
         model_path="model_epoch_50.pth",
         data_dir="data",
-        num_samples=20):
+        num_samples=50):
 
     print(f"Loading model from: {model_path}")
 
@@ -124,7 +128,6 @@ def test_model(
             sa = scheduling_accuracy(pred_sched, true_sched)
             aa = ap_accuracy(pred_ap_onehot, true_ap, true_sched)
             cs = collision_score(pred_sched, num_ap=pred_ap_onehot.shape[-1])
-            
             trans_comp_acc = transmission_completion_accuracy(pred_sched.cpu().numpy(), node_packets_numpy)
 
             sched_acc_list.append(sa)
@@ -140,17 +143,20 @@ def test_model(
             print(f"  Transmission completion accuracy: {trans_comp_acc:.4f}")
 
             
-            # Visualizations for the first sample
-            #if i<4:
-             #   plot_all_doppler_windows(pred_sched, pred_ap_onehot, FREQ_SUBCARRIERS, DOPPLER_HZ)
-            #if i < 1:  # ad esempio solo il primo sample
-             #   animate_resource_grid(
-              #      pred_sched,            # [N,T] hard
-               #     pred_ap_onehot,        # [N,T,A]
-                #    num_ap=NUM_AP,
-                 #   num_subcarriers=FREQ_SUBCARRIERS
-                #)
-
+            # Visualization for the first sample
+            if i == 0: 
+                print("Visualize OFDM grid of Sample 0...")
+                
+                # Rimuovi la dimensione del batch se presente (es. [1, 10, 40] -> [10, 40])
+                sched_to_plot = pred_sched.squeeze(0) 
+                logits_to_plot = pred_ap_onehot.squeeze(0)
+                
+                visualize_ofdm_grid(
+                    sched_to_plot, 
+                    logits_to_plot, 
+                    num_subcarriers=FREQ_SUBCARRIERS,
+                    time_slots=TIME_SLOTS
+    )
 
     # Final report
     print("\n==================== FINAL RESULTS ====================")

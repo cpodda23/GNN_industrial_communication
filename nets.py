@@ -6,6 +6,7 @@ from dgl.nn import HeteroGraphConv, GraphConv
 
 from data_generation import NUM_AP, TIME_SLOTS, FREQ_SUBCARRIERS
 
+HIDDEN_SIZE = 128
 """
 Step 1: Raw data (CSI) -> CNN (CSIEncoder) -> Vector Feature 
 Step 2: Vector Feature + Position + Packets -> GNN (HeteroGraphConv) -> Final Decision
@@ -15,7 +16,7 @@ class CSIEncoder(nn.Module):
     """
     Convert CSI 3D (FREQ x TIME x 2) in embedding 1D
     """
-    def __init__(self, freq=FREQ_SUBCARRIERS, time=TIME_SLOTS, channels=2, hidden=64):
+    def __init__(self, freq=FREQ_SUBCARRIERS, time=TIME_SLOTS, channels=2, hidden=HIDDEN_SIZE):
         super().__init__()
 
         # Simple CNN with 2 convolutional layers (conv) and 1 Fully Connected layer (fc)
@@ -60,7 +61,7 @@ class DeviceEncoder(nn.Module):
     Convert device position + num_packets + CSI embedding into device node features as embedding
     Use it to encode device nodes in the graph
     """
-    def __init__(self, ap_count, hidden=64):
+    def __init__(self, ap_count, hidden=HIDDEN_SIZE):
         super().__init__()
 
         # MLP for position + num_packets
@@ -70,12 +71,12 @@ class DeviceEncoder(nn.Module):
         )
         # MLP for CSI embedding
         self.csi_fc = nn.Sequential(
-            nn.Linear(ap_count * hidden, 64),
+            nn.Linear(ap_count * hidden, HIDDEN_SIZE),
             nn.ReLU()
         )
         # MLP to merge both
         self.merge = nn.Sequential(
-            nn.Linear(16 + 64, 64),
+            nn.Linear(16 + HIDDEN_SIZE, HIDDEN_SIZE),
             nn.ReLU()
         )
     # Forward method to process inputs
@@ -98,7 +99,7 @@ class APEncoder(nn.Module):
         super().__init__()
         # MLP for AP position
         self.ap_fc = nn.Sequential(
-            nn.Linear(2, 64),
+            nn.Linear(2, HIDDEN_SIZE),
             nn.ReLU()
         )
 
@@ -127,29 +128,29 @@ class IndustrialMAC_HeteroGNN(nn.Module):
 
         # GNN layers using HeteroGraphConv from DGL
         self.conv1 = HeteroGraphConv({
-        ('device','dd','device'): GraphConv(64, 64),
-        ('device','da','ap'):     GraphConv(64, 64),
-        ('ap','ad','device'):     GraphConv(64, 64),
+        ('device','dd','device'): GraphConv(HIDDEN_SIZE, HIDDEN_SIZE),
+        ('device','da','ap'):     GraphConv(HIDDEN_SIZE, HIDDEN_SIZE),
+        ('ap','ad','device'):     GraphConv(HIDDEN_SIZE, HIDDEN_SIZE),
     }, aggregate='sum')
 
         self.conv2 = HeteroGraphConv({
-        ('device','dd','device'): GraphConv(64, 64),
-        ('device','da','ap'):     GraphConv(64, 64),
-        ('ap','ad','device'):     GraphConv(64, 64),
+        ('device','dd','device'): GraphConv(HIDDEN_SIZE, HIDDEN_SIZE),
+        ('device','da','ap'):     GraphConv(HIDDEN_SIZE, HIDDEN_SIZE),
+        ('ap','ad','device'):     GraphConv(HIDDEN_SIZE, HIDDEN_SIZE),
     }, aggregate='sum')
 
         # Scheduling head (only device nodes)
         self.sched_head = nn.Sequential(
-            nn.Linear(64, 64),
+            nn.Linear(HIDDEN_SIZE, HIDDEN_SIZE),
             nn.ReLU(),
-            nn.Linear(64, time_slots),
+            nn.Linear(HIDDEN_SIZE, time_slots),
         )
 
         # AP selection head
         self.ap_head = nn.Sequential(
-        nn.Linear(64, 64),
+        nn.Linear(HIDDEN_SIZE, HIDDEN_SIZE),
         nn.ReLU(),
-        nn.Linear(64, time_slots * num_ap) # Output logits per time slot and AP
+        nn.Linear(HIDDEN_SIZE, time_slots * num_ap) # Output logits per time slot and AP
     )
         self.time_slots = time_slots
         self.num_ap = num_ap

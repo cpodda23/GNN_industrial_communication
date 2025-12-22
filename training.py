@@ -151,7 +151,7 @@ def calculate_completion_loss(pred_sched_soft, node_packets):
 
     # Penalize missing packets, if positive diff: weight = 1.0
     # Penalize extra packets if negative diff: weight = 0.1
-    loss = torch.where(diff > 0, diff, diff * -0.1)
+    loss = torch.where(diff > 0, diff, diff * 0.5)
     return torch.mean(torch.abs(loss))
 
 if __name__ == "__main__":

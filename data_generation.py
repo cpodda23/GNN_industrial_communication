@@ -14,7 +14,7 @@ TIME_SLOTS = 40             # OFDM symbols
 AREA_SIZE = 50              # meters, factory area
 DOPPLER_HZ = 5              # indoor doppler
 SHADOWING_STD = 2.0         # log-normal shadowing standard deviation
-NUM_SAMPLES = 50            # dataset samples
+NUM_SAMPLES = 1000            # dataset samples
 
 OUTPUT_DIR = "data"
 
