@@ -102,7 +102,7 @@ def generate_scheduling_ofdm(csi, num_nodes, num_ap, num_subcarriers, time_slots
     """
     Scheduling based on OFDM:
     - each AP selects 1 node per timeslot
-    - selection depends on the real OFDM CSI
+    - selection depends on the real OFDM CSI (max throughput)
     - multiple nodes can be active in the same slot (multi-AP)
     - each node has a random number of packets to send completely
     """
@@ -127,34 +127,34 @@ def generate_scheduling_ofdm(csi, num_nodes, num_ap, num_subcarriers, time_slots
         # Each AP assigns the slot to the node with the best throughput
         for a in range(num_ap):
             
-            # If there's a node with remaining packets, select it
-            selected_node = -1
+            # Initialize selection variables
+            best_node = -1
+            max_throughput = -1.0
 
-            for n in available_nodes:
+            # iteerate over available nodes to find one with packets left
+            for n in list(available_nodes):
                 
-                # Only select a node that still has packets to transmit
-                if packets_left[n] > 0:
-                    selected_node = n
-                    break
+                # Skip nodes with no packets left
+                if packets_left[n] <= 0:
+                    continue
                 
-            if selected_node == -1:
-                continue  # No nodes left to assign for this AP at this time slot
-                
-            # R[n] = estimated OFDM throughput for node n with AP a at slot t
-            R = np.zeros(num_nodes)
-                
-            for n in available_nodes:
-
                 # Complex magnitude for all subcarriers
                 mag = csi[n, a, :, t, 0]      # shape [F]
                 # We can interpret the channel as H and estimate an SNR
                 H2 = mag ** 2
                 SNR = H2 / (NOISE_POWER + EPS)
                 # Throughput over all subcarriers
-                R[n] = np.sum(np.log2(1 + SNR))
+                current_R = np.sum(np.log2(1 + SNR))
 
-            # Select the best node for this AP at slot t (among available nodes)
-            best_node = selected_node  # Choose the node that was already selected for this AP
+                # Logic Max-Throughput
+                if current_R > max_throughput:
+                    max_throughput = current_R
+                    best_node = n
+                    
+            # No available node found (every node has sent all packets)
+            if best_node == -1:
+                continue
+
 
             # Update schedule
             schedule[best_node, t] = 1.0
@@ -162,9 +162,9 @@ def generate_scheduling_ofdm(csi, num_nodes, num_ap, num_subcarriers, time_slots
 
             # Decrement the number of packets left for the selected node
             packets_left[best_node] -= 1
-            # If the node still has packets, it remains available for the next slots
-            if packets_left[best_node] == 0:
-                available_nodes.remove(best_node)
+            
+            # Remove the selected node from available nodes for this timeslot (to avoid double assignment)
+            available_nodes.remove(best_node)
 
     return schedule, ap_assign, node_packets
 

@@ -6,7 +6,7 @@ from nets import IndustrialMAC_HeteroGNN
 from training import IndustrialDataset
 from wirelessNetwork import build_hetero_graph
 from data_generation import NUM_AP, FREQ_SUBCARRIERS, TIME_SLOTS
-from resource_grid import visualize_ofdm_grid
+from resource_grid import visualize_grid
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
 
@@ -151,11 +151,12 @@ def test_model(
                 sched_to_plot = pred_sched.squeeze(0) 
                 logits_to_plot = pred_ap_onehot.squeeze(0)
                 
-                visualize_ofdm_grid(
+                visualize_grid(
                     sched_to_plot, 
                     logits_to_plot, 
                     num_subcarriers=FREQ_SUBCARRIERS,
-                    time_slots=TIME_SLOTS
+                    time_slots=TIME_SLOTS,
+                    title="OFDM"
     )
 
     # Final report

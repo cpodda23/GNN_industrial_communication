@@ -16,7 +16,7 @@ def get_ap_range(ap_idx, total_subcarriers, num_aps):
     
     return start, end
 
-def visualize_ofdm_grid(pred_sched, pred_ap_logits, num_subcarriers, time_slots):
+def visualize_grid(pred_sched, pred_ap_logits, num_subcarriers, time_slots, title):
     # Convert in numpy if necessary
     if isinstance(pred_sched, torch.Tensor):
         pred_sched = pred_sched.cpu().detach().numpy()
@@ -36,7 +36,7 @@ def visualize_ofdm_grid(pred_sched, pred_ap_logits, num_subcarriers, time_slots)
     
     ax.set_xlabel("Time Slots (t)")
     ax.set_ylabel("Frequency Subcarriers (f)")
-    ax.set_title("OFDM Resource Grid")
+    ax.set_title(f"{title} Resource Grid")
     
     # Horizontal lines that separate APs
     for ap in range(num_aps):
