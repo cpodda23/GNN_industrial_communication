@@ -7,6 +7,7 @@ from training import IndustrialDataset
 from wirelessNetwork import build_hetero_graph
 from data_generation import NUM_AP, FREQ_SUBCARRIERS, TIME_SLOTS, NOISE_POWER, EPS
 from resource_grid import visualize_grid
+from reliability import visualize_retransmission_mode
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 MODEL_PATH = "model_epoch_50.pth"
@@ -25,7 +26,9 @@ def decisions_to_fake_logits(ap_assign, num_ap):
     
     for n in range(N):
         for t in range(T):
+            # Set high value for the chosen AP
             chosen = int(ap_assign[n, t])
+            # if valid AP
             if chosen >= 0 and chosen < num_ap:
                 # high value on the chosen AP (probability ~1)
                 logits[n, t, chosen] = 100.0
@@ -127,7 +130,7 @@ def run_benchmark():
     dataset = IndustrialDataset(DATA_DIR)
     loader = DataLoader(dataset, batch_size=1, shuffle=False)
 
-    res = {"Optimal": [], "OFDM GNN": [], "TDMA": [], "FDMA": []}
+    res = {"Reference": [], "OFDM GNN": [], "TDMA": [], "FDMA": []}
 
     print(f"Start comparison on {NUM_SAMPLES} samples...")
 
@@ -140,15 +143,15 @@ def run_benchmark():
             csi_tensor = batch["csi"].squeeze(0).to(DEVICE)
             node_pkts = batch["node_packets"].squeeze(0).to(DEVICE)
             
-            # Ground Truth (Optimal)
+            # Ground Truth (Reference)
             true_sched = batch["schedule"].squeeze(0).numpy()
             true_ap = batch["ap_assign"].squeeze(0).numpy()
             csi_np = batch["csi"].squeeze(0).numpy()
             num_nodes = d_pos.shape[0]
 
-            # 1. Optimal
+            # 1. Reference
             r_opt = calculate_throughput(csi_np, true_sched, true_ap, NUM_AP, FREQ_SUBCARRIERS)
-            res["Optimal"].append(r_opt)
+            res["Reference"].append(r_opt)
 
             # 2. OFDM GNN
             g = build_hetero_graph(d_pos.cpu().numpy(), a_pos.cpu().numpy()).to(DEVICE)
@@ -181,7 +184,7 @@ def run_benchmark():
     plt.ylabel("System Throughput (Bits/Frame)")
     plt.grid(axis='y', alpha=0.3)
     
-    # Aggiungi valori sulle barre
+    # Add values on the bars
     for bar in bars:
         yval = bar.get_height()
         plt.text(bar.get_x() + bar.get_width()/2, yval, f"{yval:.0f}", ha='center', va='bottom')
@@ -203,7 +206,7 @@ def run_visual_benchmark():
     csi_np = batch["csi"].squeeze(0).numpy()       # [N, A, F, T, 2]
     node_pkts = batch["node_packets"].squeeze(0)   # [N]
     
-    # Ground Truth (OPTIMAL)
+    # Ground Truth (Reference)
     sched_opt = batch["schedule"].squeeze(0).numpy()
     ap_opt = batch["ap_assign"].squeeze(0).numpy()
     
@@ -244,9 +247,9 @@ def run_visual_benchmark():
         traceback.print_exc()
         return
 
-    # === PLOT 1: OPTIMAL ===
+    # === PLOT 1: Reference ===
     logits_opt = decisions_to_fake_logits(ap_opt, NUM_AP)
-    visualize_grid(sched_opt, logits_opt, FREQ_SUBCARRIERS, TIME_SLOTS, title="Optimal")
+    visualize_grid(sched_opt, logits_opt, FREQ_SUBCARRIERS, TIME_SLOTS, title="Reference")
     
     # === PLOT 2: TDMA ===
     logits_tdma = decisions_to_fake_logits(ap_tdma, NUM_AP)
@@ -259,7 +262,75 @@ def run_visual_benchmark():
     # === PLOT 4: GNN ===
     if sched_gnn is not None:
         visualize_grid(sched_gnn, logits_gnn, FREQ_SUBCARRIERS, TIME_SLOTS, title="OFDM GNN")
+        
+        
+def run_visual_benchmark_retx():
+    print("\n=== START ANALYSIS RELIABILITY & RETRANSMISSION ===")
+    
+    # 1. Load Dataset
+    dataset = IndustrialDataset(DATA_DIR)
+    loader = DataLoader(dataset, batch_size=1, shuffle=False)
+    batch = next(iter(loader)) # take first sample
+
+    # 2. Extract data (remove batch dimension [1, N, ...] -> [N, ...])
+    d_pos = batch["device_pos"].squeeze(0)
+    a_pos = batch["ap_pos"].squeeze(0)
+    csi_np = batch["csi"].squeeze(0).numpy()
+    node_pkts = batch["node_packets"].squeeze(0)
+    
+    # 3. Run the GNN to get the initial scheduling
+    model = IndustrialMAC_HeteroGNN().to(DEVICE)
+    try:
+        model.load_state_dict(torch.load(MODEL_PATH, map_location=DEVICE))
+        
+        # Build graph
+        g = build_hetero_graph(d_pos.numpy(), a_pos.numpy()).to(DEVICE)
+        
+        # Prediction with GNN
+        pred_sched, pred_ap_logits, _ = model(
+            g, 
+            d_pos.to(DEVICE), 
+            a_pos.to(DEVICE), 
+            batch["csi"].squeeze(0).to(DEVICE), 
+            node_pkts.to(DEVICE)
+        )
+        
+        # Convert in Numpy for visualization
+        sched_gnn = pred_sched.cpu().detach().numpy()      # [N, T]
+        logits_gnn = pred_ap_logits.cpu().detach().numpy() # [N, T, AP]
+        
+        # Get AP assignment (argmax of logits)
+        ap_assign_gnn = np.argmax(logits_gnn, axis=-1)     # [N, T]
+        
+    except Exception as e:
+        print(f"Error loading Model: {e}")
+        return
+
+    # 4. CALL THE RELIABILITY FUNCTION
+    
+    # Visualize Spatial Diversity Retransmission
+    visualize_retransmission_mode(
+        csi=csi_np,
+        schedule=sched_gnn,
+        ap_assign=ap_assign_gnn,
+        num_ap=NUM_AP,
+        num_subcarriers=FREQ_SUBCARRIERS,
+        time_slots=TIME_SLOTS,
+        mode='spatial'
+    )
+    
+    # Visualize Time Division Retransmission
+    visualize_retransmission_mode(
+        csi=csi_np,
+        schedule=sched_gnn,
+        ap_assign=ap_assign_gnn,
+        num_ap=NUM_AP,
+        num_subcarriers=FREQ_SUBCARRIERS,
+        time_slots=TIME_SLOTS,
+        mode='time'
+    )
     
 if __name__ == "__main__":
-    run_benchmark()
-    run_visual_benchmark()
+    run_benchmark() # visual comparison of strategies
+    run_visual_benchmark() # visualize resource grids
+    run_visual_benchmark_retx() # visualize retransmission modes
