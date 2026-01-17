@@ -1,10 +1,9 @@
 import numpy as np
 import torch
 import dgl
-from data_generation import NUM_NODES, NUM_AP
+from data_generation import NUM_NODES, AREA_SIZE
 
 # Parameters
-AREA_SIZE = 50        # meters, factory area
 DIST_THRESHOLD = 30   # distance threshold for device-device edges
 
 # =============================================================

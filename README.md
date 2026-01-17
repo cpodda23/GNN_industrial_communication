@@ -71,6 +71,35 @@ The following resource allocation schemes are implemented and compared:
 - **Optimal Allocation**:  
   An offline upper-bound solution that maximizes the system throughput under the same resource constraints. This solution is not intended for real-time implementation and serves only as a performance benchmark.
 
+
+## Retransmission and Reliability Modeling
+
+To evaluate the scheduler under realistic industrial conditions, the project includes a reliability and retransmission layer on top of the scheduling decisions.
+
+Packet delivery is affected by both:
+
+- MAC-level collisions (multiple nodes assigned to the same AP and time slot),
+
+- PHY-level channel impairments (fading and noise).
+
+A simplified HARQ-like retransmission mechanism is implemented to study reliability–latency trade-offs:
+
+- **Time-Domain Retransmissions (Baseline)**
+Failed packets are retransmitted by the same AP in future time slots.
+This approach is sensitive to channel coherence and may suffer repeated failures in slow-fading industrial environments.
+
+- **Spatial Diversity Retransmissions (Proposed)**
+Failed packets are re-routed to a different AP, exploiting independent spatial paths.
+This mechanism significantly improves reliability and latency by reducing fading correlation, at the cost of increased spectral resource usage.
+
+The retransmission logic allows the evaluation of:
+
+- Packet Error Rate (PER),
+
+- Reliability gains from spatial diversity,
+
+- Latency distributions and URLLC compliance.
+
 ## Performance Evaluation
 
 Performance is evaluated both quantitatively and qualitatively:
@@ -78,9 +107,11 @@ Performance is evaluated both quantitatively and qualitatively:
 - System throughput (bits per frame),
 - Scheduling and AP-assignment accuracy,
 - Transmission completion rate,
+- Collision and resource utilization metrics,
+- Packet Error Rate (PER) and retransmission latency
 - Visual inspection of time–frequency resource grids.
 
-The use of explicit OFDMA frames allows a fair and structured comparison between learning-based and classical allocation strategies, following the methodology commonly adopted in industrial wireless communication literature.
+The use of explicit OFDMA frames and retransmission-aware evaluation enables a fair and structured comparison between learning-based and classical MAC strategies, following methodologies commonly adopted in industrial wireless communication literature.
 
 
 
